@@ -1,5 +1,6 @@
 import { Buffer } from 'buffer'
 global.Buffer = Buffer
+
 import React, { useState, useRef } from 'react'
 import {
   View,
@@ -11,62 +12,65 @@ import {
 } from 'react-native'
 import TcpSocket from 'react-native-tcp-socket'
 
-// BMW F56 DoIP constants
 const DOIP_PORT = 13400
 const TESTER_ADDR = [0x0E, 0x80]
 const DME_ADDR    = [0x00, 0x10]
 
-// Discovery targets to try in order
 const DISCOVERY_TARGETS = [
   '169.254.1.1',
-  '169.254.255.255',
-  '192.168.16.1'
+  '169.254.0.1',
+  '169.254.100.1',
+  '169.254.124.1',
+  '169.254.255.255'
+]
+
+const TCP_TARGETS = [
+  '169.254.1.1',
+  '169.254.0.1',
+  '169.254.124.1',
+  '169.254.100.1'
 ]
 
 export default function App() {
-  const [status, setStatus]     = useState('Ready.\nPlug in ENET cable and tap Discover.')
+  const [status, setStatus]       = useState('Ready.\nPlug in ENET cable and tap Discover.')
   const [connState, setConnState] = useState('idle')
-  const [log, setLog]           = useState([])
+  const [log, setLog]             = useState([])
 
-  const socketRef        = useRef(null)
-  const discoveredIpRef  = useRef(null)
-  const keepaliveRef     = useRef(null)
+  const socketRef       = useRef(null)
+  const discoveredIpRef = useRef(null)
+  const keepaliveRef    = useRef(null)
 
-  // Add a line to the log
   const addLog = (line) => {
     const timestamp = new Date().toLocaleTimeString()
     setLog(prev => [`[${timestamp}] ${line}`, ...prev].slice(0, 50))
   }
 
-  // Build a DoIP Vehicle Identification Request (UDP)
   const makeDiscoveryPayload = () => Buffer.from([
-    0x02, 0xFD,             // Protocol version + inverse
-    0x00, 0x01,             // Payload type: Vehicle Identification Request
-    0x00, 0x00, 0x00, 0x00  // Payload length: 0
+    0x02, 0xFD,
+    0x00, 0x01,
+    0x00, 0x00, 0x00, 0x00
   ])
 
-  // Build a DoIP Routing Activation Request (TCP)
   const makeRoutingActivation = () => Buffer.from([
-    0x02, 0xFD,             // Version
-    0x00, 0x05,             // Payload type: Routing Activation Request
-    0x00, 0x00, 0x00, 0x07, // Length: 7
-    0x0E, 0x80,             // Source address: 0x0E80 (tester)
-    0x00,                   // Activation type: Default
-    0x00, 0x00, 0x00, 0x00  // Reserved
+    0x02, 0xFD,
+    0x00, 0x05,
+    0x00, 0x00, 0x00, 0x07,
+    0x0E, 0x80,
+    0x00,
+    0x00, 0x00, 0x00, 0x00
   ])
 
-  // Wrap UDS bytes in a DoIP Diagnostic Message frame (0x8001)
   const makeDoIPFrame = (udsBytes) => {
-    const bodyLen = 2 + 2 + udsBytes.length // SA + DA + UDS
+    const bodyLen = 2 + 2 + udsBytes.length
     return Buffer.from([
-      0x02, 0xFD,                          // Version
-      0x80, 0x01,                          // Payload type: Diagnostic Message
-      0x00, 0x00,                          // Length high bytes
-      (bodyLen >> 8) & 0xFF,               // Length byte 3
-      bodyLen & 0xFF,                      // Length byte 4
-      ...TESTER_ADDR,                      // SA: 0x0E80
-      ...DME_ADDR,                         // DA: 0x0010 (DME)
-      ...udsBytes                          // UDS payload
+      0x02, 0xFD,
+      0x80, 0x01,
+      0x00, 0x00,
+      (bodyLen >> 8) & 0xFF,
+      bodyLen & 0xFF,
+      ...TESTER_ADDR,
+      ...DME_ADDR,
+      ...udsBytes
     ])
   }
 
@@ -77,17 +81,33 @@ export default function App() {
     setStatus('Searching for F56...')
     addLog('Starting DoIP discovery...')
 
-    // Try each target IP in sequence
-    for (const target of DISCOVERY_TARGETS) {
-      addLog(`Trying ${target}...`)
-      setStatus(`Trying ${target}...`)
+    const payload = makeDiscoveryPayload()
 
-      const found = await tryUDPDiscovery(target)
+    // Step 1 — try UDP broadcast on each target
+    for (const target of DISCOVERY_TARGETS) {
+      addLog(`Trying UDP ${target}...`)
+      setStatus(`Trying ${target}...`)
+      const found = await tryUDPDiscovery(payload, target)
       if (found) {
         discoveredIpRef.current = target
         setConnState('discovered')
         setStatus(`F56 found at ${target}\nTap Connect to start session.`)
-        addLog(`Vehicle found at ${target}`)
+        addLog(`Vehicle found via UDP at ${target}`)
+        return
+      }
+    }
+
+    // Step 2 — UDP failed, try direct TCP on common ZGW addresses
+    addLog('UDP failed — trying direct TCP...')
+    for (const target of TCP_TARGETS) {
+      addLog(`Trying TCP ${target}...`)
+      setStatus(`TCP ping ${target}...`)
+      const reachable = await tryTCPPing(target)
+      if (reachable) {
+        discoveredIpRef.current = target
+        setConnState('discovered')
+        setStatus(`F56 found at ${target}\nTap Connect to start session.`)
+        addLog(`Vehicle reachable via TCP at ${target}`)
         return
       }
     }
@@ -97,7 +117,7 @@ export default function App() {
     addLog('Discovery failed — no response from any target')
   }
 
-  const tryUDPDiscovery = (target) => {
+  const tryUDPDiscovery = (payload, target) => {
     return new Promise((resolve) => {
       let resolved = false
       const finish = (result) => {
@@ -108,30 +128,49 @@ export default function App() {
         }
       }
 
-      // Timeout after 2 seconds per target
       const timer = setTimeout(() => finish(false), 2000)
 
       try {
-        const payload = makeDiscoveryPayload()
-
-        // react-native-tcp-socket UDP
         const udpClient = TcpSocket.createConnection(
           { host: target, port: DOIP_PORT, tls: false },
-          () => {
-            udpClient.write(payload)
-          }
+          () => { udpClient.write(payload) }
         )
-
         udpClient.on('data', () => {
           udpClient.destroy()
           finish(true)
         })
-
         udpClient.on('error', () => finish(false))
         udpClient.on('close', () => finish(false))
-
       } catch (e) {
         addLog(`UDP error: ${e.message}`)
+        finish(false)
+      }
+    })
+  }
+
+  const tryTCPPing = (target) => {
+    return new Promise((resolve) => {
+      let resolved = false
+      const finish = (result) => {
+        if (!resolved) {
+          resolved = true
+          clearTimeout(timer)
+          resolve(result)
+        }
+      }
+
+      const timer = setTimeout(() => finish(false), 2000)
+
+      try {
+        const socket = TcpSocket.createConnection(
+          { host: target, port: DOIP_PORT, tls: false },
+          () => {
+            socket.destroy()
+            finish(true)
+          }
+        )
+        socket.on('error', () => finish(false))
+      } catch (e) {
         finish(false)
       }
     })
@@ -145,7 +184,7 @@ export default function App() {
 
     setConnState('connecting')
     setStatus(`Opening session to ${ip}...`)
-    addLog(`Connecting TCP to ${ip}:${DOIP_PORT}`)
+    addLog(`TCP connecting to ${ip}:${DOIP_PORT}`)
 
     const socket = TcpSocket.createConnection(
       { host: ip, port: DOIP_PORT, tls: false },
@@ -156,16 +195,15 @@ export default function App() {
     )
 
     socket.on('data', (data) => {
-      const hex = Buffer.from(data).toString('hex').toUpperCase()
-      addLog(`RX: ${hex}`)
-
       const bytes = Buffer.from(data)
+      const hex = bytes.toString('hex').toUpperCase().match(/.{1,2}/g).join(' ')
+      addLog(`RX: ${hex}`)
 
       // Routing Activation Response = payload type 0x0006
       if (bytes.length > 3 &&
           bytes[2] === 0x00 &&
           bytes[3] === 0x06) {
-        addLog('Routing Activation successful')
+        addLog('Routing Activation successful!')
         setConnState('connected')
         setStatus('Connected to F56.\nDiagnostic session active.')
         startKeepalive(socket)
@@ -180,10 +218,8 @@ export default function App() {
 
     socket.on('close', () => {
       addLog('Socket closed')
-      if (connState === 'connected') {
-        setConnState('idle')
-        setStatus('Connection closed.')
-      }
+      setConnState('idle')
+      setStatus('Connection closed.\nTap Discover to reconnect.')
     })
 
     socketRef.current = socket
@@ -193,10 +229,8 @@ export default function App() {
 
   const startKeepalive = (socket) => {
     if (keepaliveRef.current) clearInterval(keepaliveRef.current)
-
     keepaliveRef.current = setInterval(() => {
       try {
-        // UDS 0x3E 0x80 = Tester Present, suppress response
         socket.write(makeDoIPFrame([0x3E, 0x80]))
         addLog('Tester Present sent')
       } catch (e) {
@@ -209,14 +243,11 @@ export default function App() {
 
   const disconnect = () => {
     addLog('Disconnecting...')
-
     if (keepaliveRef.current) {
       clearInterval(keepaliveRef.current)
       keepaliveRef.current = null
     }
-
     try {
-      // UDS 0x10 0x01 = Return to default session
       socketRef.current?.write(makeDoIPFrame([0x10, 0x01]))
       setTimeout(() => {
         socketRef.current?.destroy()
@@ -226,14 +257,13 @@ export default function App() {
       socketRef.current?.destroy()
       socketRef.current = null
     }
-
     discoveredIpRef.current = null
     setConnState('idle')
     setStatus('Disconnected.\nSafe to unplug.')
   }
 
-  // ── SEND A TEST UDS REQUEST ───────────────────────────────
-  // UDS 0x22 0xF1 0x90 = Read VIN by DID
+  // ── READ VIN ──────────────────────────────────────────────
+
   const readVIN = () => {
     if (!socketRef.current) return
     addLog('Requesting VIN (0x22 0xF190)...')
@@ -243,7 +273,7 @@ export default function App() {
   // ── UI ────────────────────────────────────────────────────
 
   const stateColor = {
-    idle:        '#666',
+    idle:        '#666666',
     discovering: '#FFD60A',
     discovered:  '#0A84FF',
     connecting:  '#FF9F0A',
@@ -262,6 +292,8 @@ export default function App() {
 
   return (
     <SafeAreaView style={styles.container}>
+
+      <Text style={styles.title}>Project F56</Text>
 
       {/* Status Card */}
       <View style={[styles.card, { borderColor: stateColor[connState] + '66' }]}>
@@ -338,11 +370,19 @@ function ActionButton({ label, color, disabled, onPress }) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#000',
+    backgroundColor: '#000000',
     padding: 16
   },
+  title: {
+    color: '#ffffff',
+    fontSize: 20,
+    fontWeight: '600',
+    textAlign: 'center',
+    marginBottom: 16,
+    marginTop: 8
+  },
   card: {
-    backgroundColor: '#111',
+    backgroundColor: '#111111',
     borderRadius: 16,
     borderWidth: 1,
     padding: 20,
@@ -362,7 +402,7 @@ const styles = StyleSheet.create({
     marginBottom: 8
   },
   statusText: {
-    color: '#fff',
+    color: '#ffffff',
     fontSize: 14,
     textAlign: 'center',
     fontFamily: 'Courier',
@@ -377,7 +417,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     padding: 16,
     alignItems: 'center',
-    backgroundColor: '#111'
+    backgroundColor: '#111111'
   },
   buttonText: {
     fontSize: 15,
@@ -388,11 +428,11 @@ const styles = StyleSheet.create({
     backgroundColor: '#0a0a0a',
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#222',
+    borderColor: '#222222',
     padding: 12
   },
   logHeader: {
-    color: '#444',
+    color: '#444444',
     fontSize: 10,
     fontWeight: '600',
     letterSpacing: 2,
@@ -402,7 +442,7 @@ const styles = StyleSheet.create({
     flex: 1
   },
   logLine: {
-    color: '#0f0',
+    color: '#00ff00',
     fontSize: 11,
     fontFamily: 'Courier',
     lineHeight: 18
