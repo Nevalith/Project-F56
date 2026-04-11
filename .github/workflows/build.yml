@@ -21,41 +21,33 @@ jobs:
     - name: Install dependencies
       run: npm install
 
-    - name: Setup Expo
-      uses: expo/expo-github-action@v8
-      with:
-        expo-version: latest
-        token: ${{ secrets.EXPO_TOKEN }}
-
-    - name: Prebuild iOS
-      run: npx expo prebuild --platform ios --clean
+    # We keep Expo CLI only to generate the 'ios' folder since you don't have it in your repo
+    - name: Generate iOS Folder (Prebuild)
+      run: npx expo prebuild --platform ios --template blank
 
     - name: Install CocoaPods
       run: |
         cd ios
         pod install
 
-    - name: Build iOS
+    - name: Build iOS (Unsigned for AltStore)
       run: |
         cd ios
         xcodebuild \
-          -workspace ProjectF56.xcworkspace \
-          -scheme ProjectF56 \
+          -workspace *.xcworkspace \
+          -scheme main \
           -configuration Release \
           -destination 'generic/platform=iOS' \
-          CODE_SIGN_IDENTITY="" \
-          CODE_SIGNING_REQUIRED=NO \
           CODE_SIGNING_ALLOWED=NO \
-          IPHONEOS_DEPLOYMENT_TARGET=16.0 \
-          -derivedDataPath ./build \
-          build
+          CODE_SIGNING_REQUIRED=NO \
+          CODE_SIGN_IDENTITY="" \
+          AD_HOC_CODE_SIGNING_ALLOWED=YES \
+          -derivedDataPath ./build
 
     - name: Package IPA
       run: |
-        APP_PATH=$(find ios/build -name "*.app" -type d | head -1)
-        echo "Found: $APP_PATH"
         mkdir -p Payload
-        cp -r "$APP_PATH" Payload/
+        cp -r ios/build/Build/Products/Release-iphoneos/*.app Payload/
         zip -r ProjectF56.ipa Payload/
 
     - name: Upload IPA
@@ -63,4 +55,3 @@ jobs:
       with:
         name: ProjectF56-IPA
         path: ProjectF56.ipa
-        retention-days: 7
