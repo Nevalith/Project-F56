@@ -24,11 +24,18 @@ const DISCOVERY_TARGETS = [
   '169.254.255.255'
 ]
 
-const TCP_TARGETS = [
-  '169.254.1.1',
-  '169.254.0.1',
-  '169.254.124.1',
-  '169.254.100.1'
+const TCP_TARGETS = (() => {
+  const targets = []
+  // Scan common ZGW subnets
+  for (let i = 0; i <= 255; i++) {
+    targets.push(`169.254.${i}.1`)
+  }
+  // Also try .2 and .100 in each subnet
+  for (let i = 0; i <= 255; i++) {
+    targets.push(`169.254.${i}.2`)
+  }
+  return targets
+})()
 ]
 
 export default function App() {
@@ -128,7 +135,7 @@ export default function App() {
         }
       }
 
-      const timer = setTimeout(() => finish(false), 2000)
+      const timer = setTimeout(() => finish(false), 500)
 
       try {
         const udpClient = TcpSocket.createConnection(
