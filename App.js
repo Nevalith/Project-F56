@@ -11,36 +11,16 @@ import {
   ScrollView
 } from 'react-native'
 import TcpSocket from 'react-native-tcp-socket'
+import UdpSocket from 'react-native-udp' // Added proper UDP library
 
 const DOIP_PORT = 13400
 const TESTER_ADDR = [0x0E, 0x80]
 const DME_ADDR    = [0x00, 0x10]
 
-const DISCOVERY_TARGETS = [
-  '169.254.1.1',
-  '169.254.0.1',
-  '169.254.100.1',
-  '169.254.124.1',
-  '169.254.255.255'
-]
-
-const TCP_TARGETS = (() => {
-  const targets = []
-  // Scan common ZGW subnets
-  for (let i = 0; i <= 255; i++) {
-    targets.push(`169.254.${i}.1`)
-  }
-  // Also try .2 and .100 in each subnet
-  for (let i = 0; i <= 255; i++) {
-    targets.push(`169.254.${i}.2`)
-  }
-  return targets
-})()
-
 export default function App() {
   const [status, setStatus]       = useState('Ready.\nPlug in ENET cable and tap Discover.')
   const [connState, setConnState] = useState('idle')
-  const [log, setLog]             = useState([])
+  const [log, setLog]              = useState([])
 
   const socketRef       = useRef(null)
   const discoveredIpRef = useRef(null)
@@ -67,7 +47,7 @@ export default function App() {
   ])
 
   const makeDoIPFrame = (udsBytes) => {
-    const bodyLen = 2 + 2 + udsBytes.length
+    const bodyLen = 4 + udsBytes.length // Length includes Tester & DME addr
     return Buffer.from([
       0x02, 0xFD,
       0x80, 0x01,
@@ -80,122 +60,60 @@ export default function App() {
     ])
   }
 
-  // ── DISCOVER ──────────────────────────────────────────────
+  // ── DISCOVER (Proper UDP Broadcast) ──────────────────────────
 
   const discover = async () => {
     setConnState('discovering')
-    setStatus('Searching for F56...')
-    addLog('Starting DoIP discovery...')
+    setStatus('Broadcasting for F56...')
+    addLog('Starting UDP Discovery...')
+
+    const socket = UdpSocket.createSocket({ type: 'udp4' })
+    socket.bind(0) 
 
     const payload = makeDiscoveryPayload()
 
-    // Step 1 — try UDP broadcast on each target
-    for (const target of DISCOVERY_TARGETS) {
-      addLog(`Trying UDP ${target}...`)
-      setStatus(`Trying ${target}...`)
-      const found = await tryUDPDiscovery(payload, target)
-      if (found) {
-        discoveredIpRef.current = target
-        setConnState('discovered')
-        setStatus(`F56 found at ${target}\nTap Connect to start session.`)
-        addLog(`Vehicle found via UDP at ${target}`)
-        return
-      }
-    }
-
-    // Step 2 — UDP failed, try direct TCP on common ZGW addresses
-    addLog('UDP failed — trying direct TCP...')
-    for (const target of TCP_TARGETS) {
-      addLog(`Trying TCP ${target}...`)
-      setStatus(`TCP ping ${target}...`)
-      const reachable = await tryTCPPing(target)
-      if (reachable) {
-        discoveredIpRef.current = target
-        setConnState('discovered')
-        setStatus(`F56 found at ${target}\nTap Connect to start session.`)
-        addLog(`Vehicle reachable via TCP at ${target}`)
-        return
-      }
-    }
-
-    setConnState('error')
-    setStatus('No response.\n\nCheck:\n• Ignition ON\n• ENET cable in OBD2 port\n• Phone connected via ENET adapter')
-    addLog('Discovery failed — no response from any target')
-  }
-
-  const tryUDPDiscovery = (payload, target) => {
-    return new Promise((resolve) => {
-      let resolved = false
-      const finish = (result) => {
-        if (!resolved) {
-          resolved = true
-          clearTimeout(timer)
-          resolve(result)
-        }
-      }
-
-      const timer = setTimeout(() => finish(false), 500)
-
-      try {
-        const udpClient = TcpSocket.createConnection(
-          { host: target, port: DOIP_PORT, tls: false },
-          () => { udpClient.write(payload) }
-        )
-        udpClient.on('data', () => {
-          udpClient.destroy()
-          finish(true)
-        })
-        udpClient.on('error', () => finish(false))
-        udpClient.on('close', () => finish(false))
-      } catch (e) {
-        addLog(`UDP error: ${e.message}`)
-        finish(false)
-      }
+    socket.on('message', (msg, rinfo) => {
+      addLog(`Vehicle found! IP: ${rinfo.address}`)
+      discoveredIpRef.current = rinfo.address
+      setConnState('discovered')
+      setStatus(`F56 found at ${rinfo.address}\nTap Connect.`)
+      socket.close()
     })
-  }
 
-  const tryTCPPing = (target) => {
-    return new Promise((resolve) => {
-      let resolved = false
-      const finish = (result) => {
-        if (!resolved) {
-          resolved = true
-          clearTimeout(timer)
-          resolve(result)
-        }
-      }
-
-      const timer = setTimeout(() => finish(false), 2000)
-
-      try {
-        const socket = TcpSocket.createConnection(
-          { host: target, port: DOIP_PORT, tls: false },
-          () => {
-            socket.destroy()
-            finish(true)
-          }
-        )
-        socket.on('error', () => finish(false))
-      } catch (e) {
-        finish(false)
-      }
+    socket.on('error', (err) => {
+      addLog(`UDP Error: ${err.message}`)
+      socket.close()
     })
+
+    // Broadcast to the APIPA subnet
+    socket.send(payload, 0, payload.length, DOIP_PORT, '169.254.255.255', (err) => {
+      if (err) addLog(`Send error: ${err.message}`)
+    })
+
+    // Timeout after 3 seconds
+    setTimeout(() => {
+      if (discoveredIpRef.current === null) {
+        socket.close()
+        setConnState('error')
+        setStatus('Discovery failed.\nEnsure Ignition is ON.')
+      }
+    }, 3000)
   }
 
-  // ── CONNECT ───────────────────────────────────────────────
+  // ── CONNECT (TCP Session) ───────────────────────────────────
 
   const connect = () => {
     const ip = discoveredIpRef.current
     if (!ip) return
 
     setConnState('connecting')
-    setStatus(`Opening session to ${ip}...`)
+    setStatus(`Connecting to ${ip}...`)
     addLog(`TCP connecting to ${ip}:${DOIP_PORT}`)
 
     const socket = TcpSocket.createConnection(
       { host: ip, port: DOIP_PORT, tls: false },
       () => {
-        addLog('TCP connected — sending Routing Activation...')
+        addLog('TCP connected — activating routing...')
         socket.write(makeRoutingActivation())
       }
     )
@@ -205,13 +123,10 @@ export default function App() {
       const hex = bytes.toString('hex').toUpperCase().match(/.{1,2}/g).join(' ')
       addLog(`RX: ${hex}`)
 
-      // Routing Activation Response = payload type 0x0006
-      if (bytes.length > 3 &&
-          bytes[2] === 0x00 &&
-          bytes[3] === 0x06) {
-        addLog('Routing Activation successful!')
+      if (bytes[3] === 0x06) {
+        addLog('Routing Active!')
         setConnState('connected')
-        setStatus('Connected to F56.\nDiagnostic session active.')
+        setStatus('Connected to F56.')
         startKeepalive(socket)
       }
     })
@@ -219,238 +134,83 @@ export default function App() {
     socket.on('error', (error) => {
       addLog(`Socket error: ${error.message}`)
       setConnState('error')
-      setStatus(`Connection error:\n${error.message}`)
-    })
-
-    socket.on('close', () => {
-      addLog('Socket closed')
-      setConnState('idle')
-      setStatus('Connection closed.\nTap Discover to reconnect.')
     })
 
     socketRef.current = socket
   }
-
-  // ── KEEPALIVE ─────────────────────────────────────────────
 
   const startKeepalive = (socket) => {
     if (keepaliveRef.current) clearInterval(keepaliveRef.current)
     keepaliveRef.current = setInterval(() => {
       try {
         socket.write(makeDoIPFrame([0x3E, 0x80]))
-        addLog('Tester Present sent')
       } catch (e) {
         clearInterval(keepaliveRef.current)
       }
     }, 4000)
   }
 
-  // ── DISCONNECT ────────────────────────────────────────────
-
-  const disconnect = () => {
-    addLog('Disconnecting...')
-    if (keepaliveRef.current) {
-      clearInterval(keepaliveRef.current)
-      keepaliveRef.current = null
-    }
-    try {
-      socketRef.current?.write(makeDoIPFrame([0x10, 0x01]))
-      setTimeout(() => {
-        socketRef.current?.destroy()
-        socketRef.current = null
-      }, 300)
-    } catch (e) {
-      socketRef.current?.destroy()
-      socketRef.current = null
-    }
-    discoveredIpRef.current = null
-    setConnState('idle')
-    setStatus('Disconnected.\nSafe to unplug.')
-  }
-
-  // ── READ VIN ──────────────────────────────────────────────
-
   const readVIN = () => {
     if (!socketRef.current) return
-    addLog('Requesting VIN (0x22 0xF190)...')
+    addLog('Reading VIN...')
     socketRef.current.write(makeDoIPFrame([0x22, 0xF1, 0x90]))
   }
 
-  // ── UI ────────────────────────────────────────────────────
-
-  const stateColor = {
-    idle:        '#666666',
-    discovering: '#FFD60A',
-    discovered:  '#0A84FF',
-    connecting:  '#FF9F0A',
-    connected:   '#30D158',
-    error:       '#FF453A'
+  const disconnect = () => {
+    addLog('Disconnecting...')
+    clearInterval(keepaliveRef.current)
+    socketRef.current?.destroy()
+    socketRef.current = null
+    discoveredIpRef.current = null
+    setConnState('idle')
   }
 
-  const stateLabel = {
-    idle:        'IDLE',
-    discovering: 'SEARCHING',
-    discovered:  'FOUND',
-    connecting:  'CONNECTING',
-    connected:   'CONNECTED',
-    error:       'ERROR'
+  // ── UI Logic (State mapping) ───────────────────────────────
+
+  const stateColor = {
+    idle: '#666666', discovering: '#FFD60A', discovered: '#0A84FF',
+    connecting: '#FF9F0A', connected: '#30D158', error: '#FF453A'
   }
 
   return (
     <SafeAreaView style={styles.container}>
-
       <Text style={styles.title}>Project F56</Text>
-
-      {/* Status Card */}
       <View style={[styles.card, { borderColor: stateColor[connState] + '66' }]}>
-        <View style={[styles.dot, { backgroundColor: stateColor[connState] }]} />
-        <Text style={[styles.stateLabel, { color: stateColor[connState] }]}>
-          {stateLabel[connState]}
-        </Text>
+        <Text style={[styles.stateLabel, { color: stateColor[connState] }]}>{connState.toUpperCase()}</Text>
         <Text style={styles.statusText}>{status}</Text>
       </View>
-
-      {/* Buttons */}
       <View style={styles.buttons}>
-        <ActionButton
-          label="Discover F56"
-          color="#0A84FF"
-          disabled={connState === 'connecting' || connState === 'connected'}
-          onPress={discover}
-        />
-        <ActionButton
-          label="Connect"
-          color="#30D158"
-          disabled={connState !== 'discovered'}
-          onPress={connect}
-        />
-        <ActionButton
-          label="Read VIN"
-          color="#FF9F0A"
-          disabled={connState !== 'connected'}
-          onPress={readVIN}
-        />
-        <ActionButton
-          label="Disconnect"
-          color="#FF453A"
-          disabled={connState !== 'connected'}
-          onPress={disconnect}
-        />
+        <ActionButton label="Discover F56" color="#0A84FF" onPress={discover} disabled={connState === 'connected'} />
+        <ActionButton label="Connect" color="#30D158" onPress={connect} disabled={connState !== 'discovered'} />
+        <ActionButton label="Read VIN" color="#FF9F0A" onPress={readVIN} disabled={connState !== 'connected'} />
+        <ActionButton label="Disconnect" color="#FF453A" onPress={disconnect} disabled={connState !== 'connected'} />
       </View>
-
-      {/* Log */}
-      <View style={styles.logContainer}>
-        <Text style={styles.logHeader}>DIAGNOSTIC LOG</Text>
-        <ScrollView style={styles.logScroll}>
-          {log.map((line, i) => (
-            <Text key={i} style={styles.logLine}>{line}</Text>
-          ))}
-        </ScrollView>
-      </View>
-
+      <ScrollView style={styles.logContainer}><Text style={styles.logLine}>{log.join('\n')}</Text></ScrollView>
     </SafeAreaView>
   )
 }
 
 function ActionButton({ label, color, disabled, onPress }) {
   return (
-    <TouchableOpacity
-      style={[
-        styles.button,
-        { borderColor: disabled ? color + '33' : color + '99' }
-      ]}
-      onPress={onPress}
+    <TouchableOpacity 
+      style={[styles.button, { borderColor: disabled ? color + '33' : color }]} 
+      onPress={onPress} 
       disabled={disabled}
-      activeOpacity={0.7}
     >
-      <Text style={[
-        styles.buttonText,
-        { color: disabled ? color + '44' : color }
-      ]}>
-        {label}
-      </Text>
+      <Text style={[styles.buttonText, { color: disabled ? color + '44' : color }]}>{label}</Text>
     </TouchableOpacity>
   )
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#000000',
-    padding: 16
-  },
-  title: {
-    color: '#ffffff',
-    fontSize: 20,
-    fontWeight: '600',
-    textAlign: 'center',
-    marginBottom: 16,
-    marginTop: 8
-  },
-  card: {
-    backgroundColor: '#111111',
-    borderRadius: 16,
-    borderWidth: 1,
-    padding: 20,
-    alignItems: 'center',
-    marginBottom: 16
-  },
-  dot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    marginBottom: 8
-  },
-  stateLabel: {
-    fontSize: 11,
-    fontWeight: '600',
-    letterSpacing: 1.5,
-    marginBottom: 8
-  },
-  statusText: {
-    color: '#ffffff',
-    fontSize: 14,
-    textAlign: 'center',
-    fontFamily: 'Courier',
-    lineHeight: 22
-  },
-  buttons: {
-    gap: 10,
-    marginBottom: 16
-  },
-  button: {
-    borderWidth: 1,
-    borderRadius: 12,
-    padding: 16,
-    alignItems: 'center',
-    backgroundColor: '#111111'
-  },
-  buttonText: {
-    fontSize: 15,
-    fontWeight: '600'
-  },
-  logContainer: {
-    flex: 1,
-    backgroundColor: '#0a0a0a',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#222222',
-    padding: 12
-  },
-  logHeader: {
-    color: '#444444',
-    fontSize: 10,
-    fontWeight: '600',
-    letterSpacing: 2,
-    marginBottom: 8
-  },
-  logScroll: {
-    flex: 1
-  },
-  logLine: {
-    color: '#00ff00',
-    fontSize: 11,
-    fontFamily: 'Courier',
-    lineHeight: 18
-  }
+  container: { flex: 1, backgroundColor: '#000', padding: 16 },
+  title: { color: '#fff', fontSize: 20, textAlign: 'center', marginBottom: 16 },
+  card: { backgroundColor: '#111', borderRadius: 12, borderWidth: 1, padding: 20, alignItems: 'center', marginBottom: 16 },
+  stateLabel: { fontSize: 10, letterSpacing: 1, marginBottom: 8 },
+  statusText: { color: '#fff', textAlign: 'center', fontFamily: 'Courier' },
+  buttons: { gap: 10, marginBottom: 16 },
+  button: { borderWidth: 1, borderRadius: 10, padding: 14, alignItems: 'center' },
+  buttonText: { fontWeight: '600' },
+  logContainer: { flex: 1, backgroundColor: '#050505', borderRadius: 8, padding: 10 },
+  logLine: { color: '#00ff00', fontSize: 11, fontFamily: 'Courier' }
 })
