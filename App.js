@@ -36,7 +36,6 @@ const TCP_TARGETS = (() => {
   }
   return targets
 })()
-]
 
 export default function App() {
   const [status, setStatus]       = useState('Ready.\nPlug in ENET cable and tap Discover.')
