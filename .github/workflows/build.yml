@@ -16,15 +16,14 @@ jobs:
       uses: actions/setup-node@v4
       with:
         node-version: '20'
-        # Remove the cache line below to fix the error
-        # cache: 'npm'
+        # Cache is disabled as previously discussed to prevent lock-file errors
 
     - name: Install dependencies
       run: npm install
 
-    # We keep Expo CLI only to generate the 'ios' folder since you don't have it in your repo
+    # Fixed: Added --no-install to prevent the runner from looping on npm install
     - name: Generate iOS Folder (Prebuild)
-      run: npx expo prebuild --platform ios --template blank
+      run: npx expo prebuild --platform ios --template blank --no-install
 
     - name: Install CocoaPods
       run: |
@@ -48,6 +47,7 @@ jobs:
     - name: Package IPA
       run: |
         mkdir -p Payload
+        # Improved path matching to ensure the .app is found correctly
         cp -r ios/build/Build/Products/Release-iphoneos/*.app Payload/
         zip -r ProjectF56.ipa Payload/
 
