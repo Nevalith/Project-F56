@@ -60,7 +60,8 @@ jobs:
     - name: Package IPA
       run: |
         mkdir -p Payload
-        cp -r ios/build/Build/Products/Release-iphoneos/*.app Payload/
+        # This matches the 'name' from app.json
+        cp -r ios/build/Build/Products/Release-iphoneos/ProjectF56.app Payload/
         zip -r ProjectF56.ipa Payload/
 
     - name: Upload IPA
