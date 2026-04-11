@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "Project-F56",
-    "slug": "project-f56",
+    "name": "ProjectF56",
+    "slug": "projectf56",
     "version": "1.0.0",
     "ios": {
       "bundleIdentifier": "com.nevalith.projectf56",
