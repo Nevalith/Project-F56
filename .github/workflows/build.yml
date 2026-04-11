@@ -25,20 +25,36 @@ jobs:
     - name: Generate iOS Folder (Prebuild)
       run: npx expo prebuild --platform ios --no-install
 
-    - name: Fix Xcode Project UUIDs
+    - name: Force Boost Mirror and Fix UUIDs
       run: |
-        # This fixes the "unknown UUID" error by cleaning the project file
-        sed -i '' '/3151269E1E60452289E85E15/d' ios/*.xcodeproj/project.pbxproj || true
+        # 1. Remove the lines causing the 'unknown UUID' error in the Xcode project
+        # This uses a wildcard to find the project file regardless of the exact name
+        find ios -name "project.pbxproj" -exec sed -i '' '/PBXResourcesBuildPhase/,/files = (/ { /files = (/ { :a; n; /);/! { d; ba; }; }; }' {} + || true
+
+        # 2. Force a reliable Boost mirror in the Podfile to fix the Checksum error
+        cd ios
+        echo "
+        post_install do |installer|
+          installer.pod_targets.each do |target|
+            if target.name == 'boost'
+              target.spec_consumer('ios').source = { 
+                :http => 'https://boostorg.jfrog.io/artifactory/main/release/1.76.0/source/boost_1_76_0.tar.bz2',
+                :sha256 => 'f0397ba6e982c4450f27bf32a2a83292aba035b827a5623a14636ea583318c41'
+              }
+            end
+          end
+        end" >> Podfile
 
     - name: Install CocoaPods
       run: |
         cd ios
-        # Force a specific CocoaPods version that is more stable with Boost 1.76
-        sudo gem install cocoapods -v 1.15.2
-        # Use a mirror for Boost to bypass the checksum error
-        pod install --repo-update || (sleep 10 && pod install --repo-update)
+        # Nuke the corrupted boost download from the runner's cache
+        pod cache clean 'boost'
+        pod repo update
+        # Install with a retry in case of network timeout
+        pod install || (sleep 10 && pod install)
 
-    - name: Build iOS (Unsigned)
+    - name: Build iOS (Unsigned for AltStore)
       run: |
         cd ios
         xcodebuild \
