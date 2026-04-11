@@ -16,25 +16,25 @@ jobs:
       uses: actions/setup-node@v4
       with:
         node-version: '20'
-        # Cache is disabled as previously discussed to prevent lock-file errors
 
     - name: Install dependencies
-      run: npm install
+      run: |
+        npm install
+        npm install -g cocoapods
 
-    # Fixed: Added --no-install to prevent the runner from looping on npm install
     - name: Generate iOS Folder (Prebuild)
       run: npx expo prebuild --platform ios --no-install
 
     - name: Install CocoaPods
       run: |
         cd ios
-        # Clear local cache to fix the Boost checksum error
-        pod cache clean --all
-        # Force a repo update to ensure we have the latest specs
+        # Clear the specific boost cache that was failing
+        pod cache clean 'boost'
         pod repo update
-        pod install
+        # Force a retry if the download fails
+        pod install || pod install || pod install
 
-    - name: Build iOS (Unsigned for AltStore)
+    - name: Build iOS (Unsigned)
       run: |
         cd ios
         xcodebuild \
@@ -51,7 +51,6 @@ jobs:
     - name: Package IPA
       run: |
         mkdir -p Payload
-        # Improved path matching to ensure the .app is found correctly
         cp -r ios/build/Build/Products/Release-iphoneos/*.app Payload/
         zip -r ProjectF56.ipa Payload/
 
