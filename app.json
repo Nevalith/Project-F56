@@ -1,13 +1,4 @@
 {
-  "expo": {
-    "name": "ProjectF56",
-    "slug": "projectf56",
-    "version": "1.0.0",
-    "ios": {
-      "bundleIdentifier": "com.nevalith.projectf56",
-      "infoPlist": {
-        "NSLocalNetworkUsageDescription": "Communication with ENET adapter."
-      }
-    }
-  }
+  "name": "ProjectF56",
+  "displayName": "Project F56"
 }
