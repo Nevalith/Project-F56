@@ -1,0 +1,17 @@
+{
+  "expo": {
+    "name": "Project-F56",
+    "slug": "project-f56",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "ios": {
+      "bundleIdentifier": "com.nevalith.projectf56",
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSLocalNetworkUsageDescription": "Required to communicate with the ENET diagnostic adapter."
+      }
+    }
+  }
+}
