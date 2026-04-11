@@ -23,7 +23,7 @@ jobs:
 
     # Fixed: Added --no-install to prevent the runner from looping on npm install
     - name: Generate iOS Folder (Prebuild)
-      run: npx expo prebuild --platform ios --template blank --no-install
+      run: npx expo prebuild --platform ios --no-install
 
     - name: Install CocoaPods
       run: |
