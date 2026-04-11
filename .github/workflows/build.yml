@@ -18,54 +18,56 @@ jobs:
         node-version: '20'
 
     - name: Install dependencies
-      run: |
-        npm install
-        npm install -g cocoapods
+      run: npm install
 
-    - name: Generate iOS Folder (Prebuild)
-      run: npx expo prebuild --platform ios --no-install
-
-    - name: Force Boost Mirror and Fix UUIDs
-      run: |
-        # 1. Clean up the Xcode project UUIDs
-        find ios -name "project.pbxproj" -exec sed -i '' '/PBXResourcesBuildPhase/,/files = (/ { /files = (/ { :a; n; /);/! { d; ba; }; }; }' {} + || true
-
-        # 2. Use Ruby to safely inject the Boost mirror into the Podfile
-        cd ios
-        ruby -i -pe 'puts "    installer.pod_targets.each { |t| t.spec_consumer(\"ios\").source = { :http => \"https://boostorg.jfrog.io/artifactory/main/release/1.76.0/source/boost_1_76_0.tar.bz2\", :sha256 => \"f0397ba6e982c4450f27bf32a2a83292aba035b827a5623a14636ea583318c41\" } if t.name == \"boost\" }" if $_ =~ /post_install do/' Podfile
+    - name: Setup Ruby
+      uses: ruby/setup-ruby@v1
+      with:
+        ruby-version: '3.2'
+        bundler-cache: true
 
     - name: Install CocoaPods
+      run: sudo gem install cocoapods
+
+    - name: Generate iOS project
+      run: |
+        npx react-native init ProjectF56 --version 0.73.4 --skip-install --directory rn_temp
+        cp -r rn_temp/ios ./ios
+        rm -rf rn_temp
+        cp ios/ProjectF56/Info.plist ios/ProjectF56/Info.plist.bak || true
+
+    - name: Install pods
       run: |
         cd ios
-        # Nuke the corrupted boost download from the runner's cache
-        pod cache clean 'boost'
-        pod repo update
-        # Install with a retry in case of network timeout
-        pod install || (sleep 10 && pod install)
+        pod install
 
-    - name: Build iOS (Unsigned for AltStore)
+    - name: Build iOS
       run: |
         cd ios
         xcodebuild \
-          -workspace *.xcworkspace \
-          -scheme main \
+          -workspace ProjectF56.xcworkspace \
+          -scheme ProjectF56 \
           -configuration Release \
           -destination 'generic/platform=iOS' \
-          CODE_SIGNING_ALLOWED=NO \
-          CODE_SIGNING_REQUIRED=NO \
           CODE_SIGN_IDENTITY="" \
-          AD_HOC_CODE_SIGNING_ALLOWED=YES \
-          -derivedDataPath ./build
+          CODE_SIGNING_REQUIRED=NO \
+          CODE_SIGNING_ALLOWED=NO \
+          IPHONEOS_DEPLOYMENT_TARGET=16.0 \
+          -derivedDataPath ./build \
+          build
 
     - name: Package IPA
       run: |
+        APP_PATH=$(find ios/build -name "ProjectF56.app" -type d | head -1)
+        echo "App found at: $APP_PATH"
         mkdir -p Payload
-        # This matches the 'name' from app.json
-        cp -r ios/build/Build/Products/Release-iphoneos/ProjectF56.app Payload/
+        cp -r "$APP_PATH" Payload/
         zip -r ProjectF56.ipa Payload/
+        ls -lh ProjectF56.ipa
 
     - name: Upload IPA
       uses: actions/upload-artifact@v4
       with:
         name: ProjectF56-IPA
         path: ProjectF56.ipa
+        retention-days: 7
