@@ -1,9 +1,5 @@
-import { registerRootComponent } from 'expo';
-import { Buffer } from 'buffer';
+import { AppRegistry } from 'react-native'
+import App from './src/App'
+import { name as appName } from './app.json'
 
-// This MUST be the first thing that happens
-global.Buffer = Buffer;
-
-import App from './App';
-
-registerRootComponent(App);
+AppRegistry.registerComponent(appName, () => App)
