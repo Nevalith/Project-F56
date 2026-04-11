@@ -28,6 +28,10 @@ jobs:
     - name: Install CocoaPods
       run: |
         cd ios
+        # Clear local cache to fix the Boost checksum error
+        pod cache clean --all
+        # Force a repo update to ensure we have the latest specs
+        pod repo update
         pod install
 
     - name: Build iOS (Unsigned for AltStore)
