@@ -1,8 +1,9 @@
-import { registerRootComponent } from 'expo';
+import { registerRootComponent } from 'expo'; // Keep if your build.yml expects it, otherwise use AppRegistry
+import { Buffer } from 'buffer';
+global.Buffer = Buffer;
 
 import App from './App';
 
-// registerRootComponent calls AppRegistry.registerComponent('main', () => App);
-// It also ensures that whether you load the app in Expo Go or in a native build,
-// the environment is set up appropriately
-registerRootComponent(App);
+// This ensures the Buffer is available globally before App.js logic runs
+import { AppRegistry } from 'react-native';
+AppRegistry.registerComponent('main', () => App);
