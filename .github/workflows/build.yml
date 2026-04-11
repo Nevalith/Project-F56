@@ -20,26 +20,13 @@ jobs:
     - name: Install dependencies
       run: npm install
 
-    - name: Setup Ruby
-      uses: ruby/setup-ruby@v1
-      with:
-        ruby-version: '3.2'
-        bundler-cache: true
-
     - name: Install CocoaPods
       run: sudo gem install cocoapods
-
-    - name: Generate iOS project
-      run: |
-        npx react-native init ProjectF56 --version 0.73.4 --skip-install --directory rn_temp
-        cp -r rn_temp/ios ./ios
-        rm -rf rn_temp
-        cp ios/ProjectF56/Info.plist ios/ProjectF56/Info.plist.bak || true
 
     - name: Install pods
       run: |
         cd ios
-        pod install
+        NO_FLIPPER=1 pod install
 
     - name: Build iOS
       run: |
@@ -58,7 +45,7 @@ jobs:
 
     - name: Package IPA
       run: |
-        APP_PATH=$(find ios/build -name "ProjectF56.app" -type d | head -1)
+        APP_PATH=$(find ios/build -name "*.app" -type d | head -1)
         echo "App found at: $APP_PATH"
         mkdir -p Payload
         cp -r "$APP_PATH" Payload/
