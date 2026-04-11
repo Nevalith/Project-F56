@@ -3,14 +3,17 @@
     "name": "Project-F56",
     "slug": "project-f56",
     "version": "1.0.0",
-    "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "dark",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#000000"
+    },
     "ios": {
       "bundleIdentifier": "com.nevalith.projectf56",
       "supportsTablet": true,
       "infoPlist": {
-        "NSLocalNetworkUsageDescription": "Required to communicate with the ENET diagnostic adapter."
+        "NSLocalNetworkUsageDescription": "Required to communicate with the BMW/Mini ENET diagnostic adapter."
       }
     }
   }
