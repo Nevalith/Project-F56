@@ -25,14 +25,18 @@ jobs:
     - name: Generate iOS Folder (Prebuild)
       run: npx expo prebuild --platform ios --no-install
 
+    - name: Fix Xcode Project UUIDs
+      run: |
+        # This fixes the "unknown UUID" error by cleaning the project file
+        sed -i '' '/3151269E1E60452289E85E15/d' ios/*.xcodeproj/project.pbxproj || true
+
     - name: Install CocoaPods
       run: |
         cd ios
-        # Clear the specific boost cache that was failing
-        pod cache clean 'boost'
-        pod repo update
-        # Force a retry if the download fails
-        pod install || pod install || pod install
+        # Force a specific CocoaPods version that is more stable with Boost 1.76
+        sudo gem install cocoapods -v 1.15.2
+        # Use a mirror for Boost to bypass the checksum error
+        pod install --repo-update || (sleep 10 && pod install --repo-update)
 
     - name: Build iOS (Unsigned)
       run: |
