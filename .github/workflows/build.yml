@@ -27,23 +27,20 @@ jobs:
 
     - name: Force Boost Mirror and Fix UUIDs
       run: |
-        # 1. Remove the lines causing the 'unknown UUID' error in the Xcode project
-        # This uses a wildcard to find the project file regardless of the exact name
+        # 1. Clean up the Xcode project UUIDs
         find ios -name "project.pbxproj" -exec sed -i '' '/PBXResourcesBuildPhase/,/files = (/ { /files = (/ { :a; n; /);/! { d; ba; }; }; }' {} + || true
 
-        # 2. Force a reliable Boost mirror in the Podfile to fix the Checksum error
+        # 2. Inject Boost mirror into the EXISTING post_install block in the Podfile
         cd ios
-        echo "
-        post_install do |installer|
-          installer.pod_targets.each do |target|
-            if target.name == 'boost'
-              target.spec_consumer('ios').source = { 
-                :http => 'https://boostorg.jfrog.io/artifactory/main/release/1.76.0/source/boost_1_76_0.tar.bz2',
-                :sha256 => 'f0397ba6e982c4450f27bf32a2a83292aba035b827a5623a14636ea583318c41'
-              }
-            end
-          end
-        end" >> Podfile
+        sed -i '' '/post_install do |installer|/a \
+          installer.pod_targets.each do |target| \
+            if target.name == "boost" \
+              target.spec_consumer("ios").source = { \
+                :http => "https://boostorg.jfrog.io/artifactory/main/release/1.76.0/source/boost_1_76_0.tar.bz2", \
+                :sha256 => "f0397ba6e982c4450f27bf32a2a83292aba035b827a5623a14636ea583318c41" \
+              } \
+            end \
+          end' Podfile
 
     - name: Install CocoaPods
       run: |
